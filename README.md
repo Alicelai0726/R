@@ -1,0 +1,5 @@
+# Survival Modeling in Oncology Using R
+A comprehensive survival analysis and economic evaluation for a hypothetical cancer treatment, Ultradrug, using R. 
+The analysis follows the structure of a health technology assessment, incorporating survival modeling, treatment switching adjustments, and cost-effectiveness modeling. # Non-parametric methods such as Kaplan–Meier curves and RMST were used to compare treatment arms. 
+Proportional hazard assumptions were assessed using diagnostic plots including log–log plots, Schoenfeld residuals, and smoothed hazard functions. Parametric models—both combined and independently fitted—were evaluated using the flexsurv package, with log-normal selected as the base-case model due to its flexible hazard representation and strong visual fit. Additional packages such as survival, survminer, survRM2, bshazard, ggplot2, and muhaz supported data processing, visualization, and model diagnostics. 
+Treatment switching was adjusted using a Two-Stage Estimation approach based on an AFT model, and a partitioned survival model was built to estimate QALYs and ICERs.
