@@ -1,0 +1,552 @@
+# Cost-Utility Analysis of Enhanced Physiotherapy for Motor Neuron Disease Using EQ-5D and SF-6D: A Missing Data and Perspective-Based Evaluation
+# Step 1: Set the working directory to the folder containing your data file
+setwd("****")
+getwd()
+
+# Step 2: Load the dataset
+data <- read.csv("******")
+
+# Display the structure of the dataset
+str(data)
+summary(data)
+
+# Step 3: Install and load the required packages
+install.packages("mice")  # For multiple imputation
+install.packages("dplyr") # For data manipulation
+library(mice)
+library(dplyr)
+
+# Step 4: Check missing data patterns
+md.pattern(data)
+
+# Step 5: Perform multiple imputation
+imputed_data <- mice(data, method = "pmm", m = 5, maxit = 10, seed = 123)
+completed_data <- complete(imputed_data, 1)
+summary(completed_data$Costs24)
+
+# Impute EQ5D variables
+imputed_eq5d <- mice(data[c("EQ5DM0", "EQ5DM3", "EQ5DM12", "EQ5DM24")], method = "pmm", m = 5, maxit = 10, seed = 123)
+completed_eq5d <- complete(imputed_eq5d, 1)
+summary(completed_eq5d)
+
+# Impute SF6D variables
+imputed_sf6d <- mice(data[c("SF6DM0", "SF6DM3", "SF6DM12", "SF6DM24")], method = "pmm", m = 5, maxit = 10, seed = 123)
+completed_sf6d <- complete(imputed_sf6d, 1)
+summary(completed_sf6d)
+
+# Visualize imputed data distributions
+stripplot(imputed_data, pch = 20, cex = 1.2)
+densityplot(imputed_data)
+
+
+# Step 6: Combine all imputed data into the main dataset
+data_c <- completed_data
+data_c$Costs24<- completed_data$Costs24
+data_c$EQ5DM0 <- completed_eq5d$EQ5DM0
+data_c$EQ5DM3 <- completed_eq5d$EQ5DM3
+data_c$EQ5DM12 <- completed_eq5d$EQ5DM12
+data_c$EQ5DM24 <- completed_eq5d$EQ5DM24
+data_c$SF6DM0 <- completed_sf6d$SF6DM0
+data_c$SF6DM3 <- completed_sf6d$SF6DM3
+data_c$SF6DM12 <- completed_sf6d$SF6DM12
+data_c$SF6DM24 <- completed_sf6d$SF6DM24
+
+# Step 7: Calculate costs for GP visits and physiotherapy sessions
+gp_visit_cost <- 39          # Cost per GP visit
+physio_cost <- 70 * 2        # Cost per physiotherapy session (2 hours at £70/hour)
+
+data_c$GP_Cost <- data_c$GPvisits * gp_visit_cost
+data_c$PhysioSessions <- ifelse(is.na(data_c$PhysioSessions), 0, data_c$PhysioSessions)
+data_c$Physio_Cost <- data_c$PhysioSessions * physio_cost
+data_c$Total_Cost <- data_c$Costs24 + data_c$GP_Cost + data_c$Physio_Cost
+
+# Step 8: Define a function to calculate QALYs using the trapezium rule
+calculate_qalys <- function(effects, times) {
+  sum((effects[-length(effects)] + effects[-1]) * diff(times) / 2)
+}
+
+time_points <- c(0, 3, 12, 24) / 12  # Convert months to years
+
+# Apply QALY calculation for EQ5D and SF6D
+data_c$QALYs_EQ5D <- apply(
+  data_c[, c("EQ5DM0", "EQ5DM3", "EQ5DM12", "EQ5DM24")],
+  1,
+  function(x) calculate_qalys(x, time_points)
+)
+
+data_c$QALYs_SF6D <- apply(
+  data_c[, c("SF6DM0", "SF6DM3", "SF6DM12", "SF6DM24")],
+  1,
+  function(x) calculate_qalys(x, time_points)
+)
+
+summary(data_c$QALYs_EQ5D)
+summary(data_c$QALYs_SF6D)
+
+# Visualize QALYs distributions
+hist(data_c$QALYs_EQ5D, main = "QALYs of EQ5D", 
+     xlab = "QALYs", col = "lightblue", border = "black")
+hist(data_c$QALYs_SF6D, main = "QALYs of SF6D", 
+     xlab = "QALYs", col = "lightblue", border = "black")
+
+
+# Step 9: Perform group-wise analysis for total cost and QALYs
+summary_by_group <- data_c %>%
+  group_by(treatment) %>%
+  summarise(
+    Mean_Cost = mean(Total_Cost, na.rm = TRUE),
+    Mean_QALYs_EQ5D = mean(QALYs_EQ5D, na.rm = TRUE),
+    Mean_QALYs_SF6D = mean(QALYs_SF6D, na.rm = TRUE),
+    n = n()
+  )
+
+print(summary_by_group)
+
+# Step 10: Calculate ICERs for EQ5D and SF6D
+delta_cost <- diff(summary_by_group$Mean_Cost)
+delta_qalys_eq5d <- diff(summary_by_group$Mean_QALYs_EQ5D)
+delta_qalys_sf6d <- diff(summary_by_group$Mean_QALYs_SF6D)
+
+ICER_EQ5D <- delta_cost / delta_qalys_eq5d
+ICER_SF6D <- delta_cost / delta_qalys_sf6d
+
+cat("ICER (EQ5D):", ICER_EQ5D, "\n")
+cat("ICER (SF6D):", ICER_SF6D, "\n")
+
+#Step 11:Perform bootstrap analysis for cost-effectiveness
+set.seed(123)
+bootstrap_results <- data.frame(
+  Cost_Diff = replicate(1000, diff(tapply(sample(data_c$Total_Cost, replace = TRUE), data_c$treatment, mean, na.rm = TRUE))),
+  QALYs_Diff_EQ5D = replicate(1000, diff(tapply(sample(data_c$QALYs_EQ5D, replace = TRUE), data_c$treatment, mean, na.rm = TRUE))),
+  QALYs_Diff_SF6D = replicate(1000, diff(tapply(sample(data_c$QALYs_SF6D, replace = TRUE), data_c$treatment, mean, na.rm = TRUE)))
+)
+
+# Filter valid bootstrap results
+valid_results_eq5d <- bootstrap_results %>%
+  filter(is.finite(QALYs_Diff_EQ5D) & is.finite(Cost_Diff))
+valid_results_sf6d <- bootstrap_results %>%
+  filter(is.finite(QALYs_Diff_SF6D) & is.finite(Cost_Diff))
+
+# Step 12: Plot cost-effectiveness planes
+if (nrow(valid_results_eq5d) > 0) {
+  plot(valid_results_eq5d$QALYs_Diff_EQ5D, valid_results_eq5d$Cost_Diff,
+       xlab = "Incremental QALYs (EQ5D)", ylab = "Incremental Cost (£)",
+       main = "Cost-Effectiveness Plane (EQ5D)",
+       pch = 20, col = "blue", cex = 0.6)
+  abline(h = 0, v = 0, lty = 2, col = "gray")
+}
+
+# Repeat for SF6D
+if (nrow(valid_results_sf6d) > 0) {
+  plot(valid_results_sf6d$QALYs_Diff_SF6D, valid_results_sf6d$Cost_Diff,
+       xlab = "Incremental QALYs (SF6D)", ylab = "Incremental Cost (£)",
+       main = "Cost-Effectiveness Plane (SF6D)",
+       pch = 20, col = "green", cex = 0.6)
+  abline(h = 0, v = 0, lty = 2, col = "gray")
+} 
+
+
+# Step 13: Calculate CEAC
+wtp_values <- seq(0, 30000, by = 1000)  # WTP values from 0 to 30000
+
+ceac_eq5d <- sapply(wtp_values, function(wtp) {
+  mean(valid_results_eq5d$Cost_Diff - wtp * valid_results_eq5d$QALYs_Diff_EQ5D <= 0, na.rm = TRUE)
+})
+
+ceac_sf6d <- sapply(wtp_values, function(wtp) {
+  mean(valid_results_sf6d$Cost_Diff - wtp * valid_results_sf6d$QALYs_Diff_SF6D <= 0, na.rm = TRUE)
+})
+
+#Plot CEAC
+plot(wtp_values, ceac_eq5d, type = "l", col = "blue", lwd = 2,
+     xlab = "Willingness-to-Pay (£)", ylab = "Probability Cost-Effective",
+     main = "CEAC for EQ5D")
+grid()
+plot(wtp_values, ceac_sf6d, type = "l", col = "green", lwd = 2,
+     xlab = "Willingness-to-Pay (£)", ylab = "Probability Cost-Effective",
+     main = "CEAC for SF6D")
+grid() 
+
+# Step 14: Save imputed dataset
+write.csv(completed_data, "Completed_Data_Imputed.csv", row.names = FALSE) 
+cat("Completed_Data_Imputed.csv ", getwd(), "/Completed_Data_Imputed.csv\n", sep = "")
+
+
+##Additional Steps: Analyze Missing Rates, Summarize Data, and Visualize Results
+# Step 15: Analyze Missing Rates
+# Define a function to calculate missing rates by group
+calculate_missing_rate <- function(data, group_var, variables) {
+  missing_rates_by_group <- data %>%
+    group_by(!!sym(group_var)) %>%
+    summarise(across(all_of(variables), ~ mean(is.na(.)) * 100)) # Calculate missing rates
+  return(missing_rates_by_group)
+}
+
+# Specify grouping variable and variables to check
+group_var <- "treatment"  # Grouping variable
+variables <- c("Costs24", "EQ5DM0", "EQ5DM3", "EQ5DM12", "EQ5DM24", 
+               "SF6DM0", "SF6DM3", "SF6DM12", "SF6DM24") # Variables to check for missingness
+
+# Calculate missing rates by group
+missing_rates_by_group <- calculate_missing_rate(data, group_var, variables)
+
+# Print missing rates by group
+cat("Missing Rates by Group (%):\n")
+print(missing_rates_by_group)
+
+# Step 16: Summarize Imputed Data
+# Summarize imputed Costs24
+cat("Summary of Imputed Costs24 Data:\n")
+summary(completed_data$Costs24)
+
+# Summarize imputed EQ5D variables
+cat("Summary of Imputed EQ5D Variables:\n")
+summary(completed_eq5d)
+
+# Summarize imputed SF6D variables
+cat("Summary of Imputed SF6D Variables:\n")
+summary(completed_sf6d)
+
+# Step 17: Visualize Original vs. Imputed Data
+# Visualize EQ5DM24
+par(mfrow = c(1, 2))
+hist(data$EQ5DM24, main = "Original EQ5DM24", col = "blue", breaks = 10)
+hist(completed_eq5d$EQ5DM24, main = "Imputed EQ5DM24", col = "green", breaks = 10)
+
+# Visualize SF6DM24
+par(mfrow = c(1, 2))
+hist(data$SF6DM24, main = "Original SF6DM24", col = "blue", breaks = 10)
+hist(completed_sf6d$SF6DM24, main = "Imputed SF6DM24", col = "green", breaks = 10)
+
+# Visualize Costs24
+par(mfrow = c(1, 2))
+hist(data$Costs24, main = "Original Costs24", col = "blue", breaks = 10)
+hist(completed_data$Costs24, main = "Imputed Costs24", col = "green", breaks = 10)
+
+# Step 18: Compare Mean Values Before and After Imputation
+# Compare EQ5DM24 means
+mean_before_eq5d <- mean(data$EQ5DM24, na.rm = TRUE)
+mean_after_eq5d <- mean(completed_eq5d$EQ5DM24)
+cat("Mean EQ5DM24 (Before Imputation):", mean_before_eq5d, "\n")
+cat("Mean EQ5DM24 (After Imputation):", mean_after_eq5d, "\n")
+
+# Compare SF6DM24 means
+mean_before_sf6d <- mean(data$SF6DM24, na.rm = TRUE)
+mean_after_sf6d <- mean(completed_sf6d$SF6DM24)
+cat("Mean SF6DM24 (Before Imputation):", mean_before_sf6d, "\n")
+cat("Mean SF6DM24 (After Imputation):", mean_after_sf6d, "\n")
+
+# Step 19: Group-Wise Summary for Unimputed Data
+# Calculate group-wise summary for unimputed data
+summary_by_group_unimputed <- data %>%
+  group_by(treatment) %>%
+  summarise(
+    Mean_Cost = mean(Costs24, na.rm = TRUE),
+    Mean_QALYs_EQ5D = mean((EQ5DM0 + EQ5DM3 + EQ5DM12 + EQ5DM24) / 4, na.rm = TRUE),
+    Mean_QALYs_SF6D = mean((SF6DM0 + SF6DM3 + SF6DM12 + SF6DM24) / 4, na.rm = TRUE),
+    n = n()
+  )
+
+# Print group-wise summary for unimputed data
+cat("Group-Wise Summary (Unimputed Data):\n")
+print(summary_by_group_unimputed)
+
+# Step 20: Calculate Incremental Costs and QALYs for Unimputed Data
+# Calculate incremental values
+delta_cost_unimputed <- summary_by_group_unimputed$Mean_Cost[1] - summary_by_group_unimputed$Mean_Cost[2]
+delta_qalys_eq5d_unimputed <- summary_by_group_unimputed$Mean_QALYs_EQ5D[1] - summary_by_group_unimputed$Mean_QALYs_EQ5D[2]
+delta_qalys_sf6d_unimputed <- summary_by_group_unimputed$Mean_QALYs_SF6D[1] - summary_by_group_unimputed$Mean_QALYs_SF6D[2]
+
+# Calculate ICER for unimputed data
+ICER_EQ5D_unimputed <- delta_cost_unimputed / delta_qalys_eq5d_unimputed
+ICER_SF6D_unimputed <- delta_cost_unimputed / delta_qalys_sf6d_unimputed
+
+# Print incremental values and ICER
+cat("Delta Cost (Unimputed):", delta_cost_unimputed, "\n")
+cat("Delta QALYs (EQ5D, Unimputed):", delta_qalys_eq5d_unimputed, "\n")
+cat("Delta QALYs (SF6D, Unimputed):", delta_qalys_sf6d_unimputed, "\n")
+cat("ICER (EQ5D, Unimputed):", ICER_EQ5D_unimputed, "\n")
+cat("ICER (SF6D, Unimputed):", ICER_SF6D_unimputed, "\n")
+
+##Additional Analyze: Analyze Different imputation stategies
+# Define time points (convert months to years)
+time_points <- c(0, 3, 12, 24) / 12
+
+# Function to perform imputation
+perform_imputation <- function(data, method, time_points) {
+  # Ensure all required columns exist
+  required_columns <- c("Costs24", "EQ5DM0", "EQ5DM3", "EQ5DM12", "EQ5DM24",
+                        "SF6DM0", "SF6DM3", "SF6DM12", "SF6DM24", "GPvisits", "PhysioSessions")
+  missing_columns <- setdiff(required_columns, names(data))
+  
+  if (length(missing_columns) > 0) {
+    stop(paste("The following columns are missing in the dataset:", paste(missing_columns, collapse = ", ")), call. = FALSE)
+  }
+  
+  # Impute Costs24 with additional covariates
+  imputed_costs <- mice(data.frame(Costs24 = data$Costs24, EQ5DM0 = data$EQ5DM0, SF6DM0 = data$SF6DM0), 
+                        method = method, m = 5, maxit = 10, seed = 123)
+  completed_costs <- complete(imputed_costs, 1)[, "Costs24"]
+  
+  # Impute EQ5D
+  imputed_eq5d <- mice(data[c("EQ5DM0", "EQ5DM3", "EQ5DM12", "EQ5DM24")], 
+                       method = method, m = 5, maxit = 10, seed = 123)
+  completed_eq5d <- complete(imputed_eq5d, 1)
+  
+  # Impute SF6D
+  imputed_sf6d <- mice(data[c("SF6DM0", "SF6DM3", "SF6DM12", "SF6DM24")], 
+                       method = method, m = 5, maxit = 10, seed = 123)
+  completed_sf6d <- complete(imputed_sf6d, 1)
+  
+  # Combine imputed data
+  imputed_data <- data
+  imputed_data$Costs24 <- completed_costs
+  imputed_data$EQ5DM0 <- completed_eq5d$EQ5DM0
+  imputed_data$EQ5DM3 <- completed_eq5d$EQ5DM3
+  imputed_data$EQ5DM12 <- completed_eq5d$EQ5DM12
+  imputed_data$EQ5DM24 <- completed_eq5d$EQ5DM24
+  imputed_data$SF6DM0 <- completed_sf6d$SF6DM0
+  imputed_data$SF6DM3 <- completed_sf6d$SF6DM3
+  imputed_data$SF6DM12 <- completed_sf6d$SF6DM12
+  imputed_data$SF6DM24 <- completed_sf6d$SF6DM24
+  
+  # Calculate Total_Cost
+  gp_visit_cost <- 39
+  physio_cost <- 70 * 2
+  imputed_data$GP_Cost <- imputed_data$GPvisits * gp_visit_cost
+  imputed_data$PhysioSessions <- ifelse(is.na(imputed_data$PhysioSessions), 0, imputed_data$PhysioSessions)
+  imputed_data$Physio_Cost <- imputed_data$PhysioSessions * physio_cost
+  imputed_data$Total_Cost <- imputed_data$Costs24 + imputed_data$GP_Cost + imputed_data$Physio_Cost
+  
+  # Calculate QALYs
+  calculate_qalys <- function(effects, times) {
+    sum((effects[-length(effects)] + effects[-1]) * diff(times) / 2)
+  }
+  
+  imputed_data$QALYs_EQ5D <- apply(
+    imputed_data[, c("EQ5DM0", "EQ5DM3", "EQ5DM12", "EQ5DM24")],
+    1,
+    function(x) calculate_qalys(x, time_points)
+  )
+  
+  imputed_data$QALYs_SF6D <- apply(
+    imputed_data[, c("SF6DM0", "SF6DM3", "SF6DM12", "SF6DM24")],
+    1,
+    function(x) calculate_qalys(x, time_points)
+  )
+  
+  return(imputed_data)
+}
+
+# Perform imputations with different methods
+norm_results <- perform_imputation(data, "norm", time_points)
+rf_results <- perform_imputation(data, "rf", time_points)
+hotdeck_results <- perform_imputation(data, "pmm", time_points)  # Hot Deck using PMM
+
+# Summarize results
+summary_results <- data.frame(
+  Method = c("Norm", "RF", "Hot Deck"),
+  Mean_QALYs_EQ5D = c(mean(norm_results$QALYs_EQ5D, na.rm = TRUE),
+                      mean(rf_results$QALYs_EQ5D, na.rm = TRUE),
+                      mean(hotdeck_results$QALYs_EQ5D, na.rm = TRUE)),
+  SD_QALYs_EQ5D = c(sd(norm_results$QALYs_EQ5D, na.rm = TRUE),
+                    sd(rf_results$QALYs_EQ5D, na.rm = TRUE),
+                    sd(hotdeck_results$QALYs_EQ5D, na.rm = TRUE)),
+  Mean_Total_Cost = c(mean(norm_results$Total_Cost, na.rm = TRUE),
+                      mean(rf_results$Total_Cost, na.rm = TRUE),
+                      mean(hotdeck_results$Total_Cost, na.rm = TRUE)),
+  SD_Total_Cost = c(sd(norm_results$Total_Cost, na.rm = TRUE),
+                    sd(rf_results$Total_Cost, na.rm = TRUE),
+                    sd(hotdeck_results$Total_Cost, na.rm = TRUE))
+)
+print(summary_results)
+
+# Visualization: Boxplots for QALYs
+par(mfrow = c(1, 3))
+boxplot(norm_results$QALYs_EQ5D, main = "Norm", col = "blue", ylab = "QALYs")
+boxplot(rf_results$QALYs_EQ5D, main = "RF", col = "green", ylab = "QALYs")
+boxplot(hotdeck_results$QALYs_EQ5D, main = "Hot Deck", col = "pink", ylab = "QALYs")
+
+# Define willingness-to-pay (WTP) thresholds
+wtp_values <- seq(0, 30000, by = 1000)
+
+# Function to calculate ICER and CEAC
+calculate_icer_ceac <- function(results, wtp_values) {
+  # Incremental cost and QALYs
+  delta_cost <- diff(tapply(results$Total_Cost, results$treatment, mean, na.rm = TRUE))
+  delta_qalys <- diff(tapply(results$QALYs_EQ5D, results$treatment, mean, na.rm = TRUE))
+  icer <- delta_cost / delta_qalys
+  
+  # Bootstrap analysis
+  set.seed(123)
+  bootstrap_results <- data.frame(
+    Cost_Diff = replicate(1000, diff(tapply(sample(results$Total_Cost, replace = TRUE), 
+                                            results$treatment, mean, na.rm = TRUE))),
+    QALYs_Diff = replicate(1000, diff(tapply(sample(results$QALYs_EQ5D, replace = TRUE), 
+                                             results$treatment, mean, na.rm = TRUE)))
+  )
+  
+  # Filter valid results
+  valid_results <- bootstrap_results[is.finite(bootstrap_results$Cost_Diff) & 
+                                       is.finite(bootstrap_results$QALYs_Diff), ]
+  
+  # CEAC calculation
+  ceac <- sapply(wtp_values, function(wtp) {
+    mean(valid_results$Cost_Diff - wtp * valid_results$QALYs_Diff <= 0, na.rm = TRUE)
+  })
+  
+  return(list(ICER = icer, CEAC = ceac, Valid_Results = valid_results))
+}
+
+# ICER and CEAC calculations
+norm_analysis <- calculate_icer_ceac(norm_results, wtp_values)
+rf_analysis <- calculate_icer_ceac(rf_results, wtp_values)
+hotdeck_analysis <- calculate_icer_ceac(hotdeck_results, wtp_values)
+
+# Cost-effectiveness plane
+par(mfrow = c(1, 3))
+plot(norm_analysis$Valid_Results$QALYs_Diff, norm_analysis$Valid_Results$Cost_Diff,
+     main = "Norm", col = "blue", xlab = "Incremental QALYs", ylab = "Incremental Cost (£)")
+plot(rf_analysis$Valid_Results$QALYs_Diff, rf_analysis$Valid_Results$Cost_Diff,
+     main = "RF", col = "green", xlab = "Incremental QALYs", ylab = "Incremental Cost (£)")
+plot(hotdeck_analysis$Valid_Results$QALYs_Diff, hotdeck_analysis$Valid_Results$Cost_Diff,
+     main = "Hot Deck", col = "pink", xlab = "Incremental QALYs", ylab = "Incremental Cost (£)")
+
+# CEAC comparison
+plot(wtp_values, norm_analysis$CEAC, type = "l", col = "blue", lwd = 2, 
+     main = "CEAC Comparison", xlab = "Willingness-to-Pay (£)", ylab = "Probability Cost-Effective")
+lines(wtp_values, rf_analysis$CEAC, col = "green", lwd = 2)
+lines(wtp_values, hotdeck_analysis$CEAC, col = "pink", lwd = 2)
+legend("bottomright", legend = c("Norm", "RF", "Hot Deck"), col = c("blue", "green", "pink"), lwd = 2)
+
+
+
+##Additional Steps: Analyze Missing Rates, Summarize Data, and Visualize Results
+
+# Step 8': Add societal costs to the dataset
+# Define parameters for societal costs
+avg_distance <- 15  # Average one-way distance in miles
+cost_per_mile <- 0.5  # Cost per mile (£)
+hours_per_week <- 5  # Weekly informal care hours
+hourly_wage <- 15  # Market wage per hour (£)
+daily_wage <- 100  # Daily wage (£)
+weeks_of_care <- 24 / 4  # Total treatment period in weeks
+workdays_lost <- 10 * (24 / 4)  # Workdays lost during treatment period
+
+# Calculate travel costs
+data_c$Travel_Cost <- avg_distance * 2 * cost_per_mile * data_c$PhysioSessions
+
+# Calculate informal care costs
+data_c$Informal_Care_Cost <- hours_per_week * hourly_wage * weeks_of_care
+
+# Calculate productivity loss
+data_c$Productivity_Loss <- daily_wage * workdays_lost
+
+# Adjust total costs to include societal costs
+data_c$Total_Cost_Societal <- data_c$Total_Cost + 
+  data_c$Travel_Cost + 
+  data_c$Informal_Care_Cost + 
+  data_c$Productivity_Loss
+
+# Define a function to calculate QALYs
+calculate_qalys <- function(effects, times) {
+  sum((effects[-length(effects)] + effects[-1]) * diff(times) / 2)
+}
+
+# Define time points
+time_points <- c(0, 3, 12, 24) / 12  # Convert months to years
+
+# Calculate QALYs for EQ5D and SF6D
+data_c$QALYs_EQ5D <- apply(
+  data_c[, c("EQ5DM0", "EQ5DM3", "EQ5DM12", "EQ5DM24")],
+  1,
+  function(x) calculate_qalys(x, time_points)
+)
+
+data_c$QALYs_SF6D <- apply(
+  data_c[, c("SF6DM0", "SF6DM3", "SF6DM12", "SF6DM24")],
+  1,
+  function(x) calculate_qalys(x, time_points)
+)
+
+# Step 9': Summarize societal cost analysis by treatment groups
+summary_by_group <- data_c %>%
+  group_by(treatment) %>%
+  summarise(
+    Mean_Cost_Societal = mean(Total_Cost_Societal, na.rm = TRUE),
+    Mean_QALYs_EQ5D = mean(QALYs_EQ5D, na.rm = TRUE),
+    Mean_QALYs_SF6D = mean(QALYs_SF6D, na.rm = TRUE),
+    n = n()
+  )
+
+print(summary_by_group)
+
+# Step 10': Calculate ICERs for EQ5D and SF6D
+delta_cost_societal <- diff(summary_by_group$Mean_Cost_Societal)
+delta_qalys_eq5d <- diff(summary_by_group$Mean_QALYs_EQ5D)
+delta_qalys_sf6d <- diff(summary_by_group$Mean_QALYs_SF6D)
+
+ICER_EQ5D <- delta_cost_societal / delta_qalys_eq5d
+ICER_SF6D <- delta_cost_societal / delta_qalys_sf6d
+
+cat("ICER (EQ5D):", ICER_EQ5D, "\n")
+cat("ICER (SF6D):", ICER_SF6D, "\n")
+
+# Step 11': Perform bootstrap analysis for cost-effectiveness
+set.seed(123)
+bootstrap_results <- data.frame(
+  Cost_Diff = replicate(1000, diff(tapply(sample(data_c$Total_Cost_Societal, replace = TRUE), 
+                                          data_c$treatment, mean, na.rm = TRUE))),
+  QALYs_Diff_EQ5D = replicate(1000, diff(tapply(sample(data_c$QALYs_EQ5D, replace = TRUE), 
+                                                data_c$treatment, mean, na.rm = TRUE))),
+  QALYs_Diff_SF6D = replicate(1000, diff(tapply(sample(data_c$QALYs_SF6D, replace = TRUE), 
+                                                data_c$treatment, mean, na.rm = TRUE)))
+)
+
+# Filter valid bootstrap results
+valid_results_eq5d <- bootstrap_results %>%
+  filter(is.finite(Cost_Diff) & is.finite(QALYs_Diff_EQ5D))
+valid_results_sf6d <- bootstrap_results %>%
+  filter(is.finite(Cost_Diff) & is.finite(QALYs_Diff_SF6D))
+
+# Step 12': Plot cost-effectiveness planes
+if (nrow(valid_results_eq5d) > 0) {
+  plot(valid_results_eq5d$QALYs_Diff_EQ5D, valid_results_eq5d$Cost_Diff,
+       xlab = "Incremental QALYs (EQ5D)", ylab = "Incremental Cost (£)",
+       main = "Cost-Effectiveness Plane (EQ5D)",
+       pch = 20, col = "blue", cex = 0.6)
+  abline(h = 0, v = 0, lty = 2, col = "gray")
+}
+
+if (nrow(valid_results_sf6d) > 0) {
+  plot(valid_results_sf6d$QALYs_Diff_SF6D, valid_results_sf6d$Cost_Diff,
+       xlab = "Incremental QALYs (SF6D)", ylab = "Incremental Cost (£)",
+       main = "Cost-Effectiveness Plane (SF6D)",
+       pch = 20, col = "green", cex = 0.6)
+  abline(h = 0, v = 0, lty = 2, col = "gray")
+}
+
+# Step 13': Calculate CEAC
+wtp_values <- seq(0, 30000, by = 1000)
+
+ceac_eq5d <- sapply(wtp_values, function(wtp) {
+  mean(valid_results_eq5d$Cost_Diff - wtp * valid_results_eq5d$QALYs_Diff_EQ5D <= 0, na.rm = TRUE)
+})
+
+ceac_sf6d <- sapply(wtp_values, function(wtp) {
+  mean(valid_results_sf6d$Cost_Diff - wtp * valid_results_sf6d$QALYs_Diff_SF6D <= 0, na.rm = TRUE)
+})
+
+# Plot CEAC for EQ5D
+plot(wtp_values, ceac_eq5d, type = "l", col = "blue", lwd = 2,
+     xlab = "Willingness-to-Pay (£)", ylab = "Probability Cost-Effective",
+     main = "CEAC for EQ5D")
+grid()
+legend("bottomright", legend = c("EQ5D"), col = c("blue"), lwd = 2)
+
+# Plot CEAC for SF6D
+plot(wtp_values, ceac_sf6d, type = "l", col = "green", lwd = 2,
+     xlab = "Willingness-to-Pay (£)", ylab = "Probability Cost-Effective",
+     main = "CEAC for SF6D")
+grid()
+legend("bottomright", legend = c("SF6D"), col = c("green"), lwd = 2)
